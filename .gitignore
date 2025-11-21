@@ -1,0 +1,26 @@
+# save state file
+bfv_state.pkl
+
+# python compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ipython / jupyter
+.ipynb_checkpoints/
+
+# virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# matplotlib cache
+.mpl_cache/
+
+# logs
+*.log
+
+# temporary files
+*.tmp
+*.bak
