@@ -496,7 +496,6 @@ class ImageCropper:
         self.ax.imshow(np.arcsinh(image), origin='lower', cmap='gray')
         self.ax.set_title('Drag to select a region')
         
-        # Updated API: no 'drawtype'
         self.RS = RectangleSelector(self.ax, self.on_select, 
                                     interactive=True,
                                     useblit=True,
@@ -580,8 +579,13 @@ class MaskPainter:
         self.zoom_slider.observe(self._on_zoom_slider_change, names='value')
         self.brush_slider = IntSlider(value=self.brush_size, min=1, max=100, step=1, description='Brush size', continuous_update=True)
         self.brush_slider.observe(self._on_brush_size_change, names='value')
+        
+        self.feature_type_dropdown = Dropdown(
+            options=['Stellar Stream', 'Tidal Tail', 'Plume', 'Shell', 'Tidal Bridge', 'Merger Remnant'],
+            value='Stellar Stream', description='Feature type:')
 
-        display(HBox([self.next_button, self.save_button, self.reset_button, self.zoom_slider, self.brush_slider]))
+        display(HBox([self.next_button, self.save_button, self.reset_button, self.feature_type_dropdown, self.zoom_slider,
+                      self.brush_slider]))
 
         os.makedirs('./masks', exist_ok=True)
 
@@ -721,10 +725,16 @@ class MaskPainter:
 
         y0, y1 = self.view_y0, self.view_y1
         x0, x1 = self.view_x0, self.view_x1
+        
+        mask_label = self.feature_type_dropdown.value.strip()
 
         full_mask = np.zeros_like(self.full_image, dtype=np.uint8)
         full_mask[y0:y1, x0:x1] = self.current_mask
-        self.full_masks.append(full_mask)
+        
+        self.full_masks.append({
+            'mask': full_mask,
+            'label': mask_label
+        })
 
         mask_id = len(self.mask_colors) + 1
         self.full_overlay[full_mask > 0] = mask_id
@@ -800,7 +810,10 @@ class MaskPainter:
 
         masks_data = []
 
-        for i, full_mask in enumerate(self.full_masks):
+        for i, entry in enumerate(self.full_masks):
+            full_mask = entry['mask']
+            label = entry['label']
+            
             y_indices, x_indices = np.where(full_mask > 0)
             if len(x_indices) == 0 or len(y_indices) == 0:
                 continue
@@ -810,23 +823,25 @@ class MaskPainter:
 
             centre_y = (y0 + y1) // 2
             centre_x = (x0 + x1) // 2
-
+            
             mask_dict = {
                 'image_data': self.full_image[y0:y1, x0:x1],
                 'mask': full_mask[y0:y1, x0:x1],
                 'centre': (centre_x, centre_y),
-                'corners': (x0, x1, y0, y1)
+                'corners': (x0, x1, y0, y1),
+                'label': label
             }
             masks_data.append(mask_dict)
 
         # Save as HDF5
         with h5py.File('./masks/masks_data.hdf5', 'w') as f:
             for i, md in enumerate(masks_data):
-                grp = f.create_group(f'mask_{i:03d}')
+                grp = f.create_group(f'mask_{i:04d}')
                 grp.create_dataset('image_data', data=md['image_data'])
                 grp.create_dataset('mask', data=md['mask'])
                 grp.attrs['centre'] = md['centre']
                 grp.attrs['corners'] = md['corners']
+                grp.attrs['label'] = md['label']
 
         print(f'Saved {len(masks_data)} masks with associated cutouts to ./masks/masks_data.hdf5')
 
@@ -844,9 +859,14 @@ class MaskPainter:
             axes = axes.flatten()
 
             for ax, name in zip(axes, keys):
+                
+                grp = f[name]
+                
                 img = f[f'{name}/image_data'][()]
                 mask = f[f'{name}/mask'][()].astype(bool)
-
+                
+                label = grp.attrs.get('label', 'unlabelled')
+                
                 img_plot = np.log10(img) if use_log else img
                 img_masked = np.ma.masked_where(~mask, img_plot)
 
@@ -857,14 +877,15 @@ class MaskPainter:
                 flux = np.sum(img[mask])
                 area = np.count_nonzero(mask)
 
-                ax.set_title(f"{name}", fontsize=9)
+                ax.set_title(f"{name}, {label}", fontsize=9)
                 ax.set_xticks([])
                 ax.set_yticks([])
 
                 dict_masks[name] = {
                     'masked_data': np.ma.masked_where(~mask, img),
                     'area': area,
-                    'total_flux': flux
+                    'total_flux': flux,
+                    'feature_label': label
                 }
 
             for ax in axes[n:]:
