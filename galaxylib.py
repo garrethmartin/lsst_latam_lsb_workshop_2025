@@ -73,13 +73,16 @@ class GalaxyLibrary:
 
         canvas[y1c:y2c, x1c:x2c] += img[y1i:y2i, x1i:x2i]
 
-    def create_canvas(self, shape, n_objects, seed=None, z_min=0.1):
+    def create_canvas(self, shape, n_objects, seed=None, z_min=0.1, z_max=2.0):
         # generate canvas with random galaxies
         rng = np.random.default_rng(seed)
         canvas = np.zeros(shape, dtype=np.float32)
 
-        files = [f for f in self.files
-                 if self.extract_z(os.path.basename(f)) >= z_min]
+        files = [
+            f for f in self.files
+            if z_min <= self.extract_z(os.path.basename(f)) <= z_max
+        ]
+
 
         if len(files) < n_objects:
             raise ValueError(f"not enough galaxies with z >= {z_min}")
@@ -141,28 +144,73 @@ class GalaxyLibrary:
             x0 = rng.integers(0, nx)
             stars[y0, x0] += flux
         return stars
+    
+    def add_sky(self, image,
+                *,
+                sky_mag=22.5,               # sky surface brightness in mag/arcsec^2
+                fluxmag0=6.309573448e10,    # reference flux for 0 mag in ADU
+                pixscale=0.2,               # arcsec / pixel
+                effective_gain=300,         # effective e-/ADU
+                n_stars=100,
+                star_mag_range=(18.0, 22.0), # star magnitudes (min, max)
+                psf_sigma=2.5,
+                sb_noise_mag=31.0,           # 3 sigma SB limit in mag/arcsec^2 for a 10"x10" aperture
+                seed=None):
+        """
+        Produce a stacked-like image with:
+          - sky level specified in mag/arcsec^2 (uses fluxmag0)
+          - a small polynomial tilt in the background
+          - stars drawn from a magnitude range
+          - Poisson noise sampled in electrons using effective electron-per-ADU for the stack
+          - Gaussian SB-limit noise corresponding to 3 sigma in a 10"x10" aperture
 
-    def add_sky(self, image, *, mean_sky_adus=10.0,
-                 poly_coeffs=(0.,0.,0.,0.,0.,0.),
-                 additional_noise_sigma=0.5,
-                 n_stars=100, star_flux_range=(50,200),
-                 psf_sigma=2.5, gain=50., seed=None):
-        # add background and stars
+        Returns: (final_image_adus, background_adus, noise_map_adus)
+        where noise_map_adus = final_image_adus - image_sky (image_sky is the PSF-smoothed scene)
+        """
+        import numpy as np
+        from scipy.ndimage import gaussian_filter
+        rng = np.random.default_rng(seed)
+
         ny, nx = image.shape
-        y = np.linspace(-1, 1, ny)[:, None]
-        x = np.linspace(-1, 1, nx)[None, :]
-        
-        background = np.full((nx, ny), mean_sky_adus, dtype=float)
-        
-        for (i, j), c in poly_coeffs.items():
-            background += c * x**i * y**j
-            
-        stars = self.generate_stars((ny, nx), n_stars=n_stars,
-                                    flux_range=star_flux_range, seed=seed)
-        
-        image_sky = gaussian_filter(image+background+stars, sigma=psf_sigma)
 
-        noise = np.random.poisson(image_sky/gain).astype(float)
-        noise += np.random.normal(scale=additional_noise_sigma, size=image.shape)
+        # mean sky in ADU/pixel
+        mean_sky_adus = fluxmag0 * 10.0**(-0.4 * sky_mag) * (pixscale ** 2)
         
-        return image_sky + noise, background, noise
+        # background with small polynomial tilt (absolute ADU coefficients)
+        background = np.full((ny, nx), mean_sky_adus, dtype=float)
+        y = np.linspace(-1.0, 1.0, ny)[:, None]
+        x = np.linspace(-1.0, 1.0, nx)[None, :]
+        poly_coeffs = {(1, 0): -0.03 * mean_sky_adus,  # ~ -3% tilt along x
+                       (0, 1):  0.02 * mean_sky_adus}  # ~ +2% tilt along y
+        for (i, j), c in poly_coeffs.items():
+            background += c * (x ** i) * (y ** j)
+
+        # -stars: convert magnitude range to ADU flux range for generate_stars API
+        fmin = fluxmag0 * 10.0 ** (-0.4 * star_mag_range[1])
+        fmax = fluxmag0 * 10.0 ** (-0.4 * star_mag_range[0])
+        stars = self.generate_stars((ny, nx), n_stars=n_stars,
+                                    flux_range=(fmin, fmax), seed=seed)
+
+        scene = image + background + stars
+        image_sky = gaussian_filter(scene, sigma=psf_sigma) # PSF convolution
+
+        # gaussian noise from 3σ 10"x10" SB limit
+        aperture_arcsec = 10.0
+        sb_sigma_level = 3.0
+        aperture_area = aperture_arcsec ** 2  # arcsec^2
+        ap_flux = fluxmag0 * 10.0 ** (-0.4 * sb_noise_mag) * aperture_area  # ADU in aperture at sb_mag
+        npix_ap = aperture_area / (pixscale ** 2)
+        sigma_gauss_pixel = ap_flux / sb_sigma_level / np.sqrt(npix_ap)  # ADU per pixel (1-sigma)
+        gauss_noise = rng.normal(loc=0.0, scale=sigma_gauss_pixel, size=(ny, nx))
+
+        # poisson noise: sample in electrons using effective_gain = e-/ADU
+        # expected electrons per pixel = image_sky (ADU) * (e-/ADU)
+        lam_electrons = np.clip(image_sky * effective_gain, 0.0, None)
+        poisson_e = rng.poisson(lam_electrons).astype(float)
+        poisson_adu = poisson_e / effective_gain
+
+        # compose final image
+        final_image = poisson_adu + gauss_noise
+        noise_map = final_image - image_sky
+
+        return final_image, background, noise_map

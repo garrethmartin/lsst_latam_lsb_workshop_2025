@@ -11,6 +11,8 @@ from astropy.stats import SigmaClip
 from photutils.background import Background2D, MedianBackground
 from scipy.stats import norm
 from ipywidgets import interact, FloatSlider, Dropdown, Button, HBox, VBox, IntSlider
+from matplotlib.widgets import RectangleSelector
+from skimage.measure import block_reduce
 from IPython.display import clear_output, display
 import pickle
 
@@ -113,11 +115,11 @@ class FitsViewer:
     def _create_widgets(self):
         self.stretch_widget = Dropdown(options=['linear', 'log', 'sqrt', 'asinh'], value=self.display_controller.stretch,
                                       description='stretch')
-        self.contrast_slider = FloatSlider(value=self.display_controller.contrast, min=0.1, max=5.0, step=0.05,
+        self.contrast_slider = FloatSlider(value=self.display_controller.contrast, min=0.05, max=2.0, step=0.01,
                                           description='contrast')
-        self.white_slider = FloatSlider(value=self.display_controller.white_frac, min=0.0, max=1.0, step=0.01,
+        self.white_slider = FloatSlider(value=self.display_controller.white_frac, min=0.0, max=3.0, step=0.01,
                                         description='white')
-        self.scaling_slider = FloatSlider(value=self.display_controller.scaling, min=90.0, max=100.0, step=0.1,
+        self.scaling_slider = FloatSlider(value=self.display_controller.scaling, min=90.0, max=100.0, step=0.05,
                                           description='scaling (%)')
 
         interact(self._update_from_widgets,
@@ -275,8 +277,6 @@ class BinnedFitsViewer(FitsViewer):
 
         return obj
 
-
-
 class BackgroundInteractive:
     '''
     image : 2D numpy array
@@ -340,6 +340,10 @@ class BackgroundInteractive:
         upper = 100.0 - lower
         vmin_resid, vmax_resid = np.nanpercentile(self.resid, [lower, upper])
 
+        # store so the inset can use identical scaling
+        self.vmin_resid = vmin_resid
+        self.vmax_resid = vmax_resid
+
         # background
         self.axs[0].cla()
         bkg_display = np.arcsinh(self.bkg_map)
@@ -349,7 +353,13 @@ class BackgroundInteractive:
 
         # residual
         self.axs[1].cla()
-        self.axs[1].imshow(np.arcsinh(self.resid), origin='lower', cmap='Greys_r', vmin=vmin_resid, vmax=vmax_resid)
+        self.axs[1].imshow(
+            np.arcsinh(self.resid),
+            origin='lower',
+            cmap='Greys_r',
+            vmin=self.vmin_resid,
+            vmax=self.vmax_resid
+        )
         self.axs[1].set_title('Residual (click to zoom)')
         self.axs[1].set_axis_off()
 
@@ -388,16 +398,23 @@ class BackgroundInteractive:
         self.rect = Rectangle((x0, y0), x1 - x0, y1 - y0, edgecolor='red', facecolor='none', lw=2)
         self.axs[1].add_patch(self.rect)
 
-        # compute normalisation for inset using the shared display controller but based on `sub`
-        norm = self.display_controller.get_norm(sub, use_reference=False)
-
         # inset location (top-left)
-        self.ax_inset = inset_axes(self.axs[1], width=f"{int(self.inset_frac*100)}%", height=f"{int(self.inset_frac*100)}%",
-                                   loc='upper left', borderpad=1)
-        try:
-            self.ax_inset.imshow(sub, origin='lower', cmap='Greys', norm=norm)
-        except Exception:
-            self.ax_inset.imshow(sub, origin='lower', cmap='Greys')
+        self.ax_inset = inset_axes(
+            self.axs[1],
+            width=f"{int(self.inset_frac*100)}%",
+            height=f"{int(self.inset_frac*100)}%",
+            loc='upper left',
+            borderpad=1
+        )
+
+        # use same mapping as parent residual (arcsinh + same vmin/vmax)
+        self.ax_inset.imshow(
+            np.arcsinh(sub),
+            origin='lower',
+            cmap='Greys',
+            vmin=self.vmin_resid,
+            vmax=self.vmax_resid
+        )
         self.ax_inset.set_xticks([])
         self.ax_inset.set_yticks([])
 
@@ -463,17 +480,8 @@ class BackgroundInteractive:
         plt.legend(loc='lower left')
         plt.grid(True, alpha=0.3)
         plt.show()
+
         
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.widgets import RectangleSelector
-from skimage.measure import block_reduce
-
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.widgets import RectangleSelector
-from skimage.measure import block_reduce
-
 class ImageCropper:
     """
     Interactive square crop tool for extracting a region from an image.
@@ -529,7 +537,7 @@ class MaskPainter:
         self.full_image = fv.image_data.copy()
         self.full_ny, self.full_nx = self.full_image.shape
 
-        self.zoom_box_size = 300
+        self.zoom_box_size = 50
         self.zoom_centre = None
         self.zoomed = False
 
@@ -823,7 +831,7 @@ class MaskPainter:
         print(f'Saved {len(masks_data)} masks with associated cutouts to ./masks/masks_data.hdf5')
 
     @staticmethod
-    def plot_saved_masks(hdf5_path, FLUXMAG0, IMAGE_SCALE, ncols=3, use_log=True):
+    def plot_saved_masks(hdf5_path, ncols=3, use_log=True):
         import h5py
 
         dict_masks = {}
