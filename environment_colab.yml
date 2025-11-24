@@ -1,16 +1,18 @@
-name: fits_viewer
+name: lsst_lsb
 channels:
   - conda-forge
   - defaults
 dependencies:
   - astropy=5.1
   - hdf5=1.14.5
+  - h5py=3.14.0
   - ipykernel=6.29.5
   - ipympl=0.9.7
   - ipython=9.1.0
   - ipywidgets=8.0.4
   - jupyter=1.1.1
   - jupyterlab=3.6.3
+  - jupyterlab_widgets=3.0.15
   - notebook=6.5.7
   - numpy=1.26.4
   - photutils=1.13.0

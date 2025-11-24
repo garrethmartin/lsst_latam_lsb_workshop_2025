@@ -1,4 +1,4 @@
-name: fits_viewer
+name: lsst_lsb
 channels:
   - conda-forge
   - defaults
