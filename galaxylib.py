@@ -194,7 +194,7 @@ class GalaxyLibrary:
         scene = image + background + stars
         image_sky = gaussian_filter(scene, sigma=psf_sigma) # PSF convolution
 
-        # gaussian noise from 3σ 10"x10" SB limit
+        # gaussian noise from 3 sigma 10"x10" SB limit
         aperture_arcsec = 10.0
         sb_sigma_level = 3.0
         aperture_area = aperture_arcsec ** 2  # arcsec^2
@@ -214,3 +214,89 @@ class GalaxyLibrary:
         noise_map = final_image - image_sky
 
         return final_image, background, noise_map
+    
+    def interactive_sky_demo(self, canvas_adu,
+                             sky_init=22.0,
+                             noise_init=31.0,
+                             fluxmag0=6.309573448e10,
+                             pixscale=0.2,
+                             psf_sigma=2.5,
+                             effective_gain=300.,
+                             n_stars=0,
+                             star_mag_range=(18., 22.),
+                             seed=1):
+        import matplotlib.pyplot as plt
+        from ipywidgets import FloatSlider, Checkbox, VBox, Label
+        from IPython.display import display
+
+        status = Label(value="Ready")
+
+        # sliders
+        sky_slider = FloatSlider(
+            value=sky_init, min=18.0, max=25.0, step=0.1, description="sky_mag",
+            continuous_update=False
+        )
+        noise_slider = FloatSlider(
+            value=noise_init, min=25.0, max=35.0, step=0.1, description="noise_mag",
+            continuous_update=False
+        )
+
+        # checkboxes
+        enable_sky = Checkbox(value=True, description="Enable sky")
+        enable_gauss = Checkbox(value=True, description="Enable Gaussian noise")
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        # initialise imshow with a dummy image
+        dummy = np.zeros_like(canvas_adu)
+        im = ax.imshow(dummy, origin='lower', cmap='Greys', vmin=23, vmax=25)
+        cb = fig.colorbar(im, ax=ax)
+        ax.set_title(r"final image [mag / arcsec$^{2}$]")
+
+        # redraw function
+        def redraw(*args):
+            status.value = "Processing…"
+
+            sky_mag_eff = 100.0 if not enable_sky.value else sky_slider.value
+            sb_noise_eff = 100.0 if not enable_gauss.value else noise_slider.value
+
+            img_sky, _, _ = self.add_sky(
+                canvas_adu,
+                sky_mag=sky_mag_eff,
+                sb_noise_mag=sb_noise_eff,
+                fluxmag0=fluxmag0,
+                pixscale=pixscale,
+                effective_gain=effective_gain,
+                n_stars=n_stars,
+                star_mag_range=star_mag_range,
+                psf_sigma=psf_sigma,
+                seed=seed
+            )
+            
+            img_sky_sub = img_sky - np.median(img_sky)
+            # enforce a minimum to avoid log of zero or negative
+            img_sky_sub = np.clip(img_sky_sub, 1e-3, None)
+
+            img_mag = -2.5*np.log10(img_sky_sub) + 5*np.log10(pixscale) + 27
+            im.set_data(img_mag)
+            im.set_clim(vmin=None, vmax=max(sky_slider.value, noise_slider.value))
+
+            fig.canvas.draw_idle()
+            status.value = "Done"
+
+        # attach observers **once**
+        sky_slider.observe(redraw, names='value')
+        noise_slider.observe(redraw, names='value')
+        enable_sky.observe(redraw, names='value')
+        enable_gauss.observe(redraw, names='value')
+
+        # initial draw
+        redraw()
+
+        display(VBox([status,
+                      sky_slider,
+                      noise_slider,
+                      enable_sky,
+                      enable_gauss]))
