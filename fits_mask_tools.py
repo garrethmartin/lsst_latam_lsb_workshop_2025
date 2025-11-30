@@ -117,7 +117,7 @@ class FitsViewer:
                                       description='stretch')
         self.contrast_slider = FloatSlider(value=self.display_controller.contrast, min=0.05, max=2.0, step=0.01,
                                           description='contrast')
-        self.white_slider = FloatSlider(value=self.display_controller.white_frac, min=0.0, max=3.0, step=0.01,
+        self.white_slider = FloatSlider(value=self.display_controller.white_frac, min=0.0, max=10.0, step=0.01,
                                         description='white')
         self.scaling_slider = FloatSlider(value=self.display_controller.scaling, min=90.0, max=100.0, step=0.05,
                                           description='scaling (%)')

@@ -1,5 +1,7 @@
 # save state file
 bfv_state.pkl
+*_script.txt
+*_completed.ipynb
 
 # python compiled files
 __pycache__/

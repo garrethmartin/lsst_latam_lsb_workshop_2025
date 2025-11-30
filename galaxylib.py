@@ -43,35 +43,48 @@ class GalaxyLibrary:
                     plt.figure()
                     plt.imshow(np.log10(arr), origin='lower', cmap='Greys')
                     plt.title(f"{os.path.basename(fp)}:{name}")
-
-        plt.show()
+                    plt.show()
         return self.files
 
     @staticmethod
     def inject_image(canvas, img, rng=None, x0=None, y0=None):
-        # add image into canvas
+        # add image into canvas, now allowing partial off-edge placement
         if rng is None:
             rng = np.random.default_rng()
 
         ny, nx = canvas.shape
         iy, ix = img.shape
 
+        # choose centre if not given
         if x0 is None:
             x0 = rng.integers(ix//2, nx - ix//2)
         if y0 is None:
             y0 = rng.integers(iy//2, ny - iy//2)
 
-        x1c = max(x0 - ix//2, 0)
-        y1c = max(y0 - iy//2, 0)
-        x2c = min(x1c + ix, nx)
-        y2c = min(y1c + iy, ny)
+        # intended canvas box
+        x1 = x0 - ix//2
+        y1 = y0 - iy//2
+        x2 = x1 + ix
+        y2 = y1 + iy
 
-        x1i = max(0, -(x0 - ix//2))
-        y1i = max(0, -(y0 - iy//2))
-        x2i = x1i + (x2c - x1c)
-        y2i = y1i + (y2c - y1c)
+        # clip to canvas
+        xs = max(0, x1)
+        ys = max(0, y1)
+        xe = min(nx, x2)
+        ye = min(ny, y2)
 
-        canvas[y1c:y2c, x1c:x2c] += img[y1i:y2i, x1i:x2i]
+        # no intersection
+        if xs >= xe or ys >= ye:
+            return
+
+        # corresponding image region
+        img_xs = xs - x1
+        img_ys = ys - y1
+        img_xe = img_xs + (xe - xs)
+        img_ye = img_ys + (ye - ys)
+
+        canvas[ys:ye, xs:xe] += img[img_ys:img_ye, img_xs:img_xe]
+
 
     def create_canvas(self, shape, n_objects, seed=None, z_min=0.1, z_max=2.0):
         # generate canvas with random galaxies
@@ -180,8 +193,8 @@ class GalaxyLibrary:
         background = np.full((ny, nx), mean_sky_adus, dtype=float)
         y = np.linspace(-1.0, 1.0, ny)[:, None]
         x = np.linspace(-1.0, 1.0, nx)[None, :]
-        poly_coeffs = {(1, 0): -0.03 * mean_sky_adus,  # ~ -3% tilt along x
-                       (0, 1):  0.02 * mean_sky_adus}  # ~ +2% tilt along y
+        poly_coeffs = {(1, 0): -0.015 * mean_sky_adus,  # ~ -1.5% tilt along x
+                       (0, 1):  0.01 * mean_sky_adus}  # ~ +1% tilt along y
         for (i, j), c in poly_coeffs.items():
             background += c * (x ** i) * (y ** j)
 
