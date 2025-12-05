@@ -45,7 +45,6 @@ class DisplayController:
             self.scaling = scaling
 
     def _compute_vmin_vmax_from_reference(self):
-        # percentiles based on the stored image
         lower = (100.0 - self.scaling) / 2.0
         upper = 100.0 - lower
         vmin, vmax = np.nanpercentile(self.reference_image, [lower, upper])
@@ -59,9 +58,10 @@ class DisplayController:
             upper = 100.0 - lower
             vmin, vmax = np.nanpercentile(arr, [lower, upper])
 
-        vmax_adj = vmin + self.white_frac * (vmax - vmin)
-        vcenter = 0.5 * (vmin + vmax_adj)
-        vhalf_range = 0.5 * (vmax_adj - vmin) / max(self.contrast, 1e-6)
+        vmax_adj = vmin + self.white_frac*(vmax - vmin)
+        vcenter = 0.5*(vmin + vmax_adj)
+        vhalf_range = 0.5*(vmax_adj - vmin) / max(self.contrast, 1e-6)
+
         vmin_norm = vcenter - vhalf_range
         vmax_norm = vcenter + vhalf_range
 
@@ -69,58 +69,82 @@ class DisplayController:
         try:
             return ImageNormalize(arr, vmin=vmin_norm, vmax=vmax_norm, stretch=stretch)
         except Exception:
-            # fallback if something goes wrong
             return ImageNormalize(arr, vmin=np.nanmin(arr), vmax=np.nanmax(arr), stretch=LinearStretch())
+
 
 class FitsViewer:
     '''
     image : 2D numpy array
-        Image data to display.
     crop : tuple (y0, y1, x0, x1), optional
-        Region to crop the image for display.
     figsize : tuple, optional
-        Figure size for matplotlib display.
+    display_controller : DisplayController instance, optional
+
+    Optional initial slider values:
+    init_stretch : str
+    init_contrast : float
+    init_white : float
+    init_scaling : float
     '''
-    def __init__(self, image, crop=None, figsize=(8, 8), display_controller=None):
+    def __init__(self, image, crop=None, figsize=(8, 8), display_controller=None,
+                 init_stretch=None, init_contrast=None, init_white=None, init_scaling=None):
+
         self.image_data = image
         if crop:
-            self.image_data = self.image_data[crop[0]:crop[1], crop[2]:crop[3]]
+            y0, y1, x0, x1 = crop
+            self.image_data = self.image_data[y0:y1, x0:x1]
 
         self.display_data = self.image_data.copy()
 
-        # display controller
         if display_controller is None:
             self.display_controller = DisplayController(self.image_data)
         else:
             self.display_controller = display_controller
 
-        # create figure and axes
+        # apply initial overrides
+        self.display_controller.update(
+            stretch=init_stretch,
+            contrast=init_contrast,
+            white_frac=init_white,
+            scaling=init_scaling
+        )
+
         self.fig, self.ax = plt.subplots(figsize=figsize)
         self.ax.set_axis_off()
         divider = make_axes_locatable(self.ax)
         self.cax = divider.append_axes("right", size="3%", pad=0.05)
 
-        # initial display
         self.im = self.ax.imshow(self.display_data, origin='lower', cmap='gray', interpolation='nearest')
         norm = self.display_controller.get_norm(self.image_data, use_reference=True)
+
         try:
             self.im.set_norm(norm)
         except Exception:
             pass
-        self.cbar = self.fig.colorbar(self.im, cax=self.cax)
 
-        # launch interactive widgets
+        self.cbar = self.fig.colorbar(self.im, cax=self.cax)
         self._create_widgets()
 
     def _create_widgets(self):
-        self.stretch_widget = Dropdown(options=['linear', 'log', 'sqrt', 'asinh'], value=self.display_controller.stretch,
-                                      description='stretch')
-        self.contrast_slider = FloatSlider(value=self.display_controller.contrast, min=0.05, max=2.0, step=0.01,
-                                          description='contrast')
-        self.white_slider = FloatSlider(value=self.display_controller.white_frac, min=0.0, max=10.0, step=0.01,
-                                        description='white')
-        self.scaling_slider = FloatSlider(value=self.display_controller.scaling, min=90.0, max=100.0, step=0.05,
-                                          description='scaling (%)')
+        self.stretch_widget = Dropdown(
+            options=['linear', 'log', 'sqrt', 'asinh'],
+            value=self.display_controller.stretch,
+            description='stretch'
+        )
+        self.contrast_slider = FloatSlider(
+            value=self.display_controller.contrast,
+            min=0.05, max=2.0, step=0.01,
+            description='contrast'
+        )
+        self.white_slider = FloatSlider(
+            value=self.display_controller.white_frac,
+            min=0.0, max=10.0, step=0.01,
+            description='white'
+        )
+        self.scaling_slider = FloatSlider(
+            value=self.display_controller.scaling,
+            min=90.0, max=100.0, step=0.05,
+            description='scaling (%)'
+        )
 
         interact(self._update_from_widgets,
                  stretch_type=self.stretch_widget,
@@ -129,8 +153,13 @@ class FitsViewer:
                  scaling=self.scaling_slider)
 
     def _update_from_widgets(self, stretch_type='linear', contrast=1.0, white_frac=1.0, scaling=99.0):
-        # update controller then refresh image
-        self.display_controller.update(stretch=stretch_type, contrast=contrast, white_frac=white_frac, scaling=scaling)
+        self.display_controller.update(
+            stretch=stretch_type,
+            contrast=contrast,
+            white_frac=white_frac,
+            scaling=scaling
+        )
+
         norm = self.display_controller.get_norm(self.image_data, use_reference=True)
         try:
             self.im.set_norm(norm)
@@ -138,18 +167,13 @@ class FitsViewer:
             self.fig.canvas.draw_idle()
         except Exception:
             pass
-        
-class BinnedFitsViewer(FitsViewer):
+
+class BinnedFitsViewer:
     '''
-    Inherits FitsViewer.
-    Creates slider that allows interactive rebinning of the displayed image.
-    Updates FitsViewer display directly.
+    Wraps an existing FitsViewer and adds interactive rebinning.
+    Rebins on initialisation.
     '''
-    def __init__(self, fv: FitsViewer, max_bin=20):
-        """
-        fv : existing FitsViewer instance
-        max_bin : maximum binning factor for display
-        """
+    def __init__(self, fv, max_bin=20, initial_bin=1):
         self.fv = fv
         self.full_image = fv.image_data.copy()
         self.display_controller = fv.display_controller
@@ -158,23 +182,37 @@ class BinnedFitsViewer(FitsViewer):
         self.ax = fv.ax
         self.fig = fv.fig
 
-        # Start with no binning (factor=1)
-        self.image_data = self.full_image.copy()
-        self.display_data = np.ma.array(self.image_data)
+        self.initial_bin = initial_bin
 
-        # Create a slider to control binning
-        self.bin_slider = IntSlider(value=1, min=1, max=max_bin, step=1, description='Binning')
+        # Apply initial binning
+        if initial_bin <= 1:
+            self.image_data = self.full_image.copy()
+        else:
+            self.image_data = self._bin_image(self.full_image, initial_bin)
+
+        self.display_data = np.ma.array(self.image_data)
+        norm = self.display_controller.get_norm(self.image_data, use_reference=True)
+        self.im.set_data(self.display_data)
+        try:
+            self.im.set_norm(norm)
+            self.cbar.update_normal(self.im)
+            self.fig.canvas.draw_idle()
+        except Exception:
+            pass
+
+        # Slider
+        self.bin_slider = IntSlider(value=self.initial_bin, min=1, max=max_bin, step=1, description='Binning')
         self.bin_slider.observe(self._update_binning, names='value')
         display(self.bin_slider)
 
     def _update_binning(self, change):
         bin_factor = change['new']
+
         if bin_factor <= 1:
             binned = self.full_image
         else:
             binned = self._bin_image(self.full_image, bin_factor)
 
-        # Update display image only
         self.image_data = binned
         self.display_data = np.ma.array(binned)
 
@@ -189,12 +227,12 @@ class BinnedFitsViewer(FitsViewer):
 
     @staticmethod
     def _bin_image(image, factor):
-        """Bin the image by averaging over factor x factor blocks."""
         ny, nx = image.shape
-        ny_binned = ny // factor
-        nx_binned = nx // factor
-        binned = image[:ny_binned*factor, :nx_binned*factor].reshape(ny_binned, factor, nx_binned, factor)
-        return binned.mean(axis=(1,3))
+        ny_b = ny // factor
+        nx_b = nx // factor
+        cut = image[:ny_b*factor, :nx_b*factor]
+        reshaped = cut.reshape(ny_b, factor, nx_b, factor)
+        return reshaped.mean(axis=(1,3))
     
     def save_state(self, filename='bfv_state.pkl'):
         state = {
@@ -288,7 +326,7 @@ class BackgroundInteractive:
     inset_frac : float, optional
         Size of inset relative to main plot.
     '''
-    def __init__(self, image, figsize=(12, 6), zoom_size=50, inset_frac=0.35, display_controller=None):
+    def __init__(self, image, figsize=(12, 6), zoom_size=50, inset_frac=0.35, initial_binning=128, display_controller=None):
         self.image = image
         self.zoom_size = zoom_size
         self.zoom_centre = None
@@ -297,6 +335,8 @@ class BackgroundInteractive:
         self.resid = None
         self.rect = None
         self.ax_inset = None
+
+        self.initial_binning = initial_binning
 
         # display controller: if none provided create one based on the full image
         if display_controller is None:
@@ -426,7 +466,7 @@ class BackgroundInteractive:
             self._draw_zoom_elements()
 
     def interact(self):
-        box_slider = IntSlider(value=128, min=32, max=1024, step=32, description='box size', continuous_update=False)
+        box_slider = IntSlider(value=self.initial_binning, min=32, max=1024, step=32, description='box size', continuous_update=False)
         zoom_slider = IntSlider(value=self.zoom_size, min=100, max=1000, step=100, description='zoom size', continuous_update=True)
 
         interact(self._plot, box_size=box_slider)
